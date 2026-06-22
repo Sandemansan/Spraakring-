@@ -630,8 +630,13 @@ body{
 
     <label>Stem</label>
     <select id="voice-select">
-      <option value="auto">Automatisch (systeemstandaard)</option>
-      <option value="slow">Langzamer en duidelijker</option>
+      <option value="">Laden...</option>
+    </select>
+
+    <label>Spreeksnelheid</label>
+    <select id="speed-select">
+      <option value="normal">Normaal</option>
+      <option value="slow">Langzamer</option>
       <option value="fast">Sneller</option>
     </select>
 
@@ -654,7 +659,8 @@ body{
 let apiKey       = localStorage.getItem("sk_key")    || "";
 let language     = localStorage.getItem("sk_lang")   || "nl-NL";
 let optCount     = parseInt(localStorage.getItem("sk_count") || "6");
-let voicePreset  = localStorage.getItem("sk_voice")  || "auto";
+let voiceName    = localStorage.getItem("sk_voice_name") || "";
+let voiceSpeed   = localStorage.getItem("sk_speed")      || "normal";
 let speechOn     = localStorage.getItem("sk_speech") !== "off";
 let conversation = [];           // [{speaker,text}]
 let recognition  = null;
@@ -1046,29 +1052,32 @@ function updateSpeechBtn(){
 // TTS
 // ════════════════════════════════════════════════
 
-const VOICE_PROFILES = {
-  auto: { lang: null, rate: 0.88, pitch: 1.0 },
-  slow: { lang: null, rate: 0.70, pitch: 0.95 },
-  fast: { lang: null, rate: 1.15, pitch: 1.0  },
-};
+const SPEED_RATES = { normal: 0.88, slow: 0.68, fast: 1.18 };
 
 function speak(text, onEnd){
   if(!window.speechSynthesis || !speechOn){ onEnd&&onEnd(); return; }
   isSpeaking = true;
   window.speechSynthesis.cancel();
 
-  const profile = VOICE_PROFILES[voicePreset] || VOICE_PROFILES.auto;
-  const utt     = new SpeechSynthesisUtterance(text);
-  utt.rate      = profile.rate;
-  utt.pitch     = profile.pitch;
+  const utt  = new SpeechSynthesisUtterance(text);
+  utt.rate   = SPEED_RATES[voiceSpeed] || 0.88;
+  utt.pitch  = voiceSpeed==="slow" ? 0.95 : 1.0;
 
-  const voices  = window.speechSynthesis.getVoices();
-
+  const voices = window.speechSynthesis.getVoices();
   utt.lang = language;
-  const local = voices.find(v=>v.lang===language && v.localService);
-  const any   = voices.find(v=>v.lang.startsWith(language.split("-")[0]));
-  if(local) utt.voice = local;
-  else if(any) utt.voice = any;
+
+  // Gebruik gekozen stem als die beschikbaar is
+  if(voiceName){
+    const chosen = voices.find(v=>v.name===voiceName);
+    if(chosen){ utt.voice = chosen; }
+  }
+  // Terugval op lokale/beschikbare stem alleen als er geen specifieke stem gekozen is
+  if(!voiceName || !utt.voice){
+    const local = voices.find(v=>v.lang===language && v.localService);
+    const any   = voices.find(v=>v.lang.startsWith(language.split("-")[0]));
+    if(local) utt.voice = local;
+    else if(any) utt.voice = any;
+  }
 
   utt.onend = utt.onerror = ()=>{ isSpeaking=false; onEnd&&onEnd(); };
   window.speechSynthesis.speak(utt);
@@ -1077,6 +1086,37 @@ function speak(text, onEnd){
 // ════════════════════════════════════════════════
 // Settings
 // ════════════════════════════════════════════════
+function populateVoiceSelect(){
+  const sel = $("voice-select");
+  const voices = window.speechSynthesis.getVoices();
+  // Filter op taal en sorteer: lokale stemmen eerst, dan online
+  const lang2 = language.split("-")[0];
+  const matching = voices.filter(v => v.lang===language || v.lang.startsWith(lang2));
+  const others   = voices.filter(v => !matching.includes(v));
+  const list = [...matching, ...others];
+
+  sel.innerHTML = "";
+  if(list.length === 0){
+    sel.innerHTML = `<option value="">Geen stemmen gevonden</option>`;
+    return;
+  }
+  list.forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v.name;
+    // Probeer geslacht te raden uit naam
+    const nm = v.name.toLowerCase();
+    const gender = nm.includes("male") || nm.includes("man") || nm.includes("maarten") || nm.includes("guy") || nm.includes("david") || nm.includes("mark") || nm.includes("paul") ? "♂" :
+                   nm.includes("female") || nm.includes("woman") || nm.includes("fenna") || nm.includes("zira") || nm.includes("eva") || nm.includes("anna") || nm.includes("lotte") ? "♀" : "◎";
+    const local = v.localService ? " ⚡" : "";
+    const tag   = (v.lang === language) ? " ✓" : "";
+    opt.textContent = `${gender} ${v.name}${local}${tag}`;
+    if(v.name === voiceName) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // Als niets geselecteerd, kies eerste match
+  if(!voiceName && matching.length > 0) sel.value = matching[0].name;
+}
+
 function toggleSettings(){
   const m = $("settings-modal");
   if(m.classList.contains("open")){
@@ -1085,7 +1125,8 @@ function toggleSettings(){
     $("api-key-input").value  = apiKey;
     $("lang-select").value    = language;
     $("count-select").value   = optCount;
-    $("voice-select").value   = voicePreset;
+    populateVoiceSelect();
+    $("speed-select").value    = voiceSpeed;
     m.classList.add("open");
   }
 }
@@ -1094,11 +1135,13 @@ function saveSettings(){
   apiKey      = $("api-key-input").value.trim();
   language    = $("lang-select").value;
   optCount    = parseInt($("count-select").value);
-  voicePreset = $("voice-select").value;
+  voiceName  = $("voice-select").value;
+  voiceSpeed = $("speed-select").value;
   localStorage.setItem("sk_key",    apiKey);
   localStorage.setItem("sk_lang",   language);
   localStorage.setItem("sk_count",  optCount);
-  localStorage.setItem("sk_voice",  voicePreset);
+  localStorage.setItem("sk_voice_name", voiceName);
+  localStorage.setItem("sk_speed",      voiceSpeed);
   if(recognition) recognition.lang = language;
   toggleSettings();
 
@@ -1145,7 +1188,7 @@ window.addEventListener("resize",()=>{
 // ════════════════════════════════════════════════
 // Init
 // ════════════════════════════════════════════════
-window.speechSynthesis.onvoiceschanged = ()=>{};
+window.speechSynthesis.onvoiceschanged = ()=>{ if($("settings-modal").classList.contains("open")) populateVoiceSelect(); };
 window.speechSynthesis.getVoices();
 updateSpeechBtn();
 
