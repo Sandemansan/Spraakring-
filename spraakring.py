@@ -42,6 +42,7 @@ def save_api_key(key):
         f.write(key)
 
 SERVER_API_KEY = load_api_key()
+SERVER_EL_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
 
 # ──────────────────────────────────────────────
 # Fallback-opties (zonder API-sleutel)
@@ -59,10 +60,6 @@ FALLBACK = [
 @app.route("/")
 def index():
     return HTML_TEMPLATE
-
-@app.route("/api/status")
-def api_status():
-    return jsonify({"has_key": bool(SERVER_API_KEY)})
 
 @app.route("/api/savekey", methods=["POST"])
 def api_savekey():
@@ -100,6 +97,40 @@ def api_models():
         return jsonify({"models": names})
     except Exception as e:
         return jsonify({"error": str(e)})
+
+@app.route("/api/tts", methods=["POST"])
+def api_tts():
+    """Roep ElevenLabs TTS aan en geef mp3 terug als base64."""
+    import urllib.request, base64
+    data    = request.json or {}
+    text    = data.get("text", "").strip()
+    voice_id= data.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
+    el_key  = data.get("el_key", "").strip() or SERVER_EL_KEY
+    speed   = float(data.get("speed", 1.0))
+    if not el_key or not text:
+        return jsonify({"error": "geen sleutel of tekst"}), 400
+    payload = json.dumps({
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "speed": speed}
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        data=payload, method="POST"
+    )
+    req.add_header("Content-Type", "application/json")
+    req.add_header("xi-api-key", el_key)
+    req.add_header("Accept", "audio/mpeg")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            audio = r.read()
+        return jsonify({"audio": base64.b64encode(audio).decode()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/status")
+def api_status():
+    return jsonify({"has_key": bool(SERVER_API_KEY), "has_el": bool(SERVER_EL_KEY)})
 
 @app.route("/api/suggest", methods=["POST"])
 def suggest():
@@ -640,9 +671,11 @@ body{
       <option value="kind">🧒 Kind</option>
     </select>
 
-    <p class="settings-note">
-      Haal een gratis API-sleutel op via <strong>console.anthropic.com</strong>.<br>
-      Zonder sleutel werkt de app met standaard-opties.
+    <label>ElevenLabs stem-sleutel <span style="font-weight:400;opacity:.6">(optioneel — voor echte stemmen)</span></label>
+    <input type="password" id="el-key-input" placeholder="sk_..." />
+    <p class="settings-note" style="margin-top:4px">
+      Gratis account via <strong>elevenlabs.io</strong> (10.000 tekens/maand).<br>
+      Zonder deze sleutel gebruikt de app de browser-stem.
     </p>
 
     <div class="btn-row">
@@ -673,6 +706,8 @@ let sidebarHidden= window.innerWidth < 640;
 let silenceTimer = null;
 let accTranscript= "";
 let serverHasKey = false;
+let serverElKey  = false;
+let elKey        = localStorage.getItem("sk_el_key") || "";
 
 // ════════════════════════════════════════════════
 // Helpers
@@ -1060,39 +1095,94 @@ function updateSpeechBtn(){
 
 const MALE_KW   = ["male","man","maarten","guy","david","mark","paul","thomas","koen","xander"];
 const FEMALE_KW = ["female","woman","fenna","zira","eva","anna","lotte","claire","ellen","lisa","samantha"];
+// ElevenLabs stem-IDs — eleven_multilingual_v2 model
+const EL_VOICES = {
+  "vrouw-normaal" : { id:"21m00Tcm4TlvDq8ikWAM", speed:1.0  },  // Rachel
+  "vrouw-langzaam": { id:"EXAVITQu4vr4xnSDxMaL", speed:0.82 },  // Bella
+  "vrouw-snel"    : { id:"AZnzlk1XvdvUeBnXmlld", speed:1.2  },  // Domi
+  "man-normaal"   : { id:"pNInz6obpgDQGcFmaJgB", speed:1.0  },  // Adam
+  "man-langzaam"  : { id:"VR6AewLTigWG4xSOukaG", speed:0.82 },  // Arnold
+  "man-snel"      : { id:"TxGEqnHWrfWFTfGW9XjX", speed:1.2  },  // Josh
+  "tiener"        : { id:"MF3mGyEYCl7XYWbV9V6O", speed:1.05 },  // Elli
+  "kind"          : { id:"jBpfuIE2acCO8z3wKNLl", speed:1.08 },  // Gigi
+};
 const VOICE_PRESETS = {
-  "vrouw-normaal" : { rate:0.88, pitch:1.10, gender:"female" },
-  "vrouw-langzaam": { rate:0.68, pitch:1.05, gender:"female" },
-  "vrouw-snel"    : { rate:1.18, pitch:1.15, gender:"female" },
-  "man-normaal"   : { rate:0.82, pitch:0.76, gender:"male"   },
-  "man-langzaam"  : { rate:0.65, pitch:0.72, gender:"male"   },
-  "man-snel"      : { rate:1.10, pitch:0.80, gender:"male"   },
-  "tiener"        : { rate:0.98, pitch:1.28, gender:"female" },
-  "kind"          : { rate:1.05, pitch:1.58, gender:"female" },
+  "vrouw-normaal" : { rate:0.88, pitch:1.02, gender:"female" },
+  "vrouw-langzaam": { rate:0.70, pitch:1.00, gender:"female" },
+  "vrouw-snel"    : { rate:1.15, pitch:1.02, gender:"female" },
+  "man-normaal"   : { rate:0.85, pitch:0.92, gender:"male"   },
+  "man-langzaam"  : { rate:0.68, pitch:0.90, gender:"male"   },
+  "man-snel"      : { rate:1.10, pitch:0.93, gender:"male"   },
+  "tiener"        : { rate:1.00, pitch:1.14, gender:"female" },
+  "kind"          : { rate:1.05, pitch:1.26, gender:"female" },
 };
 
-function speak(text, onEnd){
+function speakBrowser(text, onEnd){
   if(!window.speechSynthesis || !speechOn){ onEnd&&onEnd(); return; }
+
+async function speakEL(text, onEnd){
+  if(!elKey && !serverElKey){ speakBrowser(text, onEnd); return; }
+  isSpeaking = true;
+  const key = elKey || "";
+  const ev  = EL_VOICES[voicePreset] || EL_VOICES["vrouw-normaal"];
+  try{
+    const res = await fetch("/api/tts",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ text, voice_id: ev.id, el_key: key, speed: ev.speed })
+    });
+    const d = await res.json();
+    if(d.error || !d.audio) throw new Error(d.error||"geen audio");
+    const bytes = atob(d.audio);
+    const arr   = new Uint8Array(bytes.length);
+    for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
+    const blob  = new Blob([arr],{type:"audio/mpeg"});
+    const url   = URL.createObjectURL(blob);
+    const aud   = new Audio(url);
+    aud.onended = aud.onerror = ()=>{ isSpeaking=false; URL.revokeObjectURL(url); onEnd&&onEnd(); };
+    aud.play();
+  }catch(e){
+    console.warn("EL TTS mislukt:",e);
+    isSpeaking=false;
+    speakBrowser(text,onEnd);
+  }
+}
+
+function speak(text, onEnd){
+  if((elKey||serverElKey) && speechOn) speakEL(text, onEnd);
+  else speakBrowser(text, onEnd);
+}
+
   isSpeaking = true;
   window.speechSynthesis.cancel();
 
   const utt    = new SpeechSynthesisUtterance(text);
   const preset = VOICE_PRESETS[voicePreset] || VOICE_PRESETS["vrouw-normaal"];
-  utt.rate  = preset.rate;
-  utt.pitch = preset.pitch;
-  utt.lang  = language;
+  utt.rate = preset.rate;
+  utt.lang = language;
 
   const voices = window.speechSynthesis.getVoices();
   const lang2  = language.split("-")[0];
   const pool   = voices.filter(v=> v.lang===language || v.lang.startsWith(lang2));
+
+  // Natural/Neural stemmen klinken het best — maar NIET vervormen met pitch
+  const isNatural = v => /natural|neural|online/i.test(v.name);
+
   let chosen = null;
   if(preset.gender==="male"){
+    // Probeer echte mannenstem
     chosen = pool.find(v=> MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
-  } else {
-    chosen = pool.find(v=> FEMALE_KW.some(k=> v.name.toLowerCase().includes(k)));
   }
-  if(!chosen) chosen = pool[0]||null;
+  if(!chosen){
+    // Verkies Natural-stemmen boven generieke
+    chosen = pool.find(v=> isNatural(v) && !MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+    if(!chosen) chosen = pool.find(v=> FEMALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+    if(!chosen) chosen = pool[0]||null;
+  }
   if(chosen) utt.voice = chosen;
+
+  // Natural/Neural stemmen klinken robotachtig bij pitch-aanpassing — laat ze met rust
+  utt.pitch = (chosen && isNatural(chosen)) ? 1.0 : preset.pitch;
 
   utt.onend = utt.onerror = ()=>{ isSpeaking=false; onEnd&&onEnd(); };
   window.speechSynthesis.speak(utt);
@@ -1109,7 +1199,8 @@ function toggleSettings(){
     $("api-key-input").value  = apiKey;
     $("lang-select").value    = language;
     $("count-select").value   = optCount;
-    $("voice-select").value = voicePreset;
+    $("voice-select").value  = voicePreset;
+    $("el-key-input").value   = elKey;
     m.classList.add("open");
   }
 }
@@ -1119,6 +1210,8 @@ function saveSettings(){
   language    = $("lang-select").value;
   optCount    = parseInt($("count-select").value);
   voicePreset = $("voice-select").value;
+  elKey       = $("el-key-input").value.trim();
+  localStorage.setItem("sk_el_key", elKey);
   localStorage.setItem("sk_key",    apiKey);
   localStorage.setItem("sk_lang",   language);
   localStorage.setItem("sk_count",  optCount);
@@ -1176,6 +1269,7 @@ updateSpeechBtn();
 // Check server key status, then render initial options
 fetch('/api/status').then(r=>r.json()).then(d=>{
   serverHasKey = !!d.has_key;
+  serverElKey  = !!d.has_el;
   if(!serverHasKey && !apiKey){
     setStatus("ℹ️ Voeg een API-sleutel toe via ⚙️ voor slimme AI-suggesties");
   }
