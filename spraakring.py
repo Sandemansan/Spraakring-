@@ -734,19 +734,21 @@ function initRecognition(){
   recognition.onend    = ()=>{ if(isListening){ try{ recognition.start() }catch(_){} } };
 
   recognition.onresult = evt =>{
-    let interim="", final="";
-    for(let i=evt.resultIndex; i<evt.results.length; i++){
-      if(evt.results[i].isFinal) final += evt.results[i][0].transcript+" ";
+    // Lees ALLE resultaten opnieuw op — voorkomt dubbele tekst op mobiel
+    let full="", interim="";
+    for(let i=0; i<evt.results.length; i++){
+      if(evt.results[i].isFinal) full += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    if(final.trim()) accTranscript += final;
-    const display = (accTranscript + interim).trim();
+    const display = (full + interim).trim();
     if(display) $("heard-text").textContent = display;
+
+    // Wacht op stilte voor verwerking
     clearTimeout(silenceTimer);
     const delay = window.innerWidth < 640 ? 1500 : 900;
     silenceTimer = setTimeout(()=>{
-      const t = (accTranscript || interim).trim();
-      if(t){ accTranscript=""; $("heard-text").textContent=t; handleHeard(t); }
+      const t = (full || interim).trim();
+      if(t){ $("heard-text").textContent=t; handleHeard(t); }
     }, delay);
   };
   return true;
