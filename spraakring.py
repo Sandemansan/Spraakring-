@@ -30,7 +30,9 @@ def load_api_key():
             k = open(p).read().strip()
             if k:
                 return k
-    return os.environ.get("ANTHROPIC_API_KEY", "")
+    return (os.environ.get("GEMINI_API_KEY") or
+            os.environ.get("ANTHROPIC_API_KEY") or
+            os.environ.get("API_KEY") or "")
 
 def save_api_key(key):
     """Sla sleutel permanent op in AppData."""
@@ -532,6 +534,22 @@ body{
 /* ── Scrollbar ── */
 ::-webkit-scrollbar{width:3px}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px}
+
+/* ── Grid mode ── */
+#grid-section{display:none;flex:1;flex-direction:column;overflow-y:auto;padding:12px 14px;gap:10px}
+#grid-center-label{text-align:center;font-size:13px;color:rgba(255,255,255,.42);padding:8px 12px;background:rgba(255,255,255,.05);border-radius:10px;line-height:1.4}
+#options-grid{display:flex;flex-wrap:wrap;gap:10px}
+.grid-option{flex:1 1 calc(50% - 10px);min-height:68px;background:linear-gradient(145deg,#1a3a5c,#2a5080);border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;font-size:14px;font-weight:600;padding:12px 10px;color:#fff;line-height:1.3;word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.4);transition:filter .2s,box-shadow .2s;animation:gridPop .35s cubic-bezier(.34,1.56,.64,1) both}
+.grid-option:hover{filter:brightness(1.2);box-shadow:0 0 22px rgba(120,200,255,.3)}
+.grid-option:active{filter:brightness(.85)}
+.grid-option.speaking{background:linear-gradient(135deg,#0a5a5a,#009999)!important;box-shadow:0 0 24px rgba(0,200,200,.65)!important}
+.grid-option.loading-cell{background:rgba(255,255,255,.04);border:2px dashed rgba(255,255,255,.12);pointer-events:none;animation:none}
+@keyframes gridPop{0%{transform:scale(0);opacity:0}100%{transform:scale(1);opacity:1}}
+.tb-icon-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;padding:0}
+.tb-icon-btn:hover{background:rgba(255,255,255,.17)}
+.tb-icon-btn.active-mode{background:rgba(74,44,138,.55);border-color:rgba(120,80,200,.7)}
+#sidebar.sb-hidden{display:none!important}
+@media(max-width:640px){#sidebar{display:none}#status-text{font-size:11px}#mic-btn{padding:8px 12px;font-size:13px}#mic-label{display:none}#heard-strip{bottom:8px}}
 </style>
 </head>
 <body>
@@ -559,6 +577,9 @@ body{
       </button>
       <button id="speech-btn" onclick="toggleSpeech()" title="Spraak aan/uit">🔊</button>
       <div id="status-text">Druk op Luisteren of spatiebalk</div>
+      <button class="tb-icon-btn" id="chat-btn" onclick="toggleSidebar()" title="Gesprek tonen/verbergen">💬</button>
+      <button class="tb-icon-btn" id="layout-btn" onclick="toggleLayout()" title="Weergave wisselen">⊞</button>
+      <button class="tb-icon-btn" id="fs-btn" onclick="toggleFullscreen()" title="Volledig scherm">⛶</button>
       <button id="settings-btn" onclick="toggleSettings()" title="Instellingen">⚙️</button>
     </div>
 
@@ -575,6 +596,12 @@ body{
       </div>
     </div>
 
+    <!-- Grid (mobiel / optioneel) -->
+    <div id="grid-section">
+      <div id="grid-center-label">—</div>
+      <div id="options-grid"></div>
+    </div>
+
   </div>
 </div>
 
@@ -583,8 +610,8 @@ body{
   <div class="settings-panel">
     <h2>⚙️ Instellingen</h2>
 
-    <label>Anthropic API-sleutel</label>
-    <input type="password" id="api-key-input" placeholder="sk-ant-..." />
+    <label>API-sleutel (Gemini of Anthropic)</label>
+    <input type="password" id="api-key-input" placeholder="AIza... of sk-ant-..." />
 
     <label>Taal</label>
     <select id="lang-select">
@@ -636,6 +663,10 @@ let isSpeaking   = false;
 let currentCtx   = "";           // last heard sentence
 let breadcrumb   = [];           // selected words trail
 let lastOptions  = [];           // for resize re-render
+let layoutMode   = window.innerWidth < 640 ? "grid" : "ring";
+let sidebarHidden= window.innerWidth < 640;
+let silenceTimer = null;
+let accTranscript= "";
 
 // ════════════════════════════════════════════════
 // Helpers
@@ -708,12 +739,15 @@ function initRecognition(){
       if(evt.results[i].isFinal) final += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    if(interim) $("heard-text").textContent = interim;
-    if(final.trim()){
-      const t = final.trim();
-      $("heard-text").textContent = t;
-      handleHeard(t);
-    }
+    if(final.trim()) accTranscript += final;
+    const display = (accTranscript + interim).trim();
+    if(display) $("heard-text").textContent = display;
+    clearTimeout(silenceTimer);
+    const delay = window.innerWidth < 640 ? 1500 : 900;
+    silenceTimer = setTimeout(()=>{
+      const t = (accTranscript || interim).trim();
+      if(t){ accTranscript=""; $("heard-text").textContent=t; handleHeard(t); }
+    }, delay);
   };
   return true;
 }
@@ -776,6 +810,8 @@ function addToTranscript(speaker, text){
 
 function clearAll(){
   conversation=[];currentCtx="";breadcrumb=[];lastOptions=[];
+  accTranscript="";clearTimeout(silenceTimer);
+  if(layoutMode==="grid"){$("options-grid").innerHTML="";$("grid-center-label").textContent="\u2014";}
   $("transcript").innerHTML = `<div id="transcript-empty" style="color:rgba(255,255,255,.2);font-size:13px;text-align:center;margin-top:36px;line-height:1.6">Start een gesprek door op de microfoon te drukken</div>`;
   $("heard-text").textContent = "—";
   $("breadcrumb").innerHTML = "";
@@ -845,6 +881,7 @@ function makeBubble(text,sz,x,y,cls,delay=0){
 }
 
 function renderLoading(){
+  if(layoutMode==="grid"){ renderLoadingGrid(); return; }
   clearRing();
   fitCanvas();
   const {x:cx,y:cy} = getCenter();
@@ -867,6 +904,7 @@ function renderLoading(){
 }
 
 function renderOptions(context, options, parentWord){
+  if(layoutMode==="grid"){ renderOptionsGrid(context, options, parentWord); return; }
   clearRing();
   const {x:cx,y:cy} = getCenter();
   const R      = getRadius();
@@ -899,6 +937,60 @@ function renderOptions(context, options, parentWord){
   updateBreadcrumb();
 }
 
+// ── Grid-modus ──
+function renderLoadingGrid(){
+  $("options-grid").innerHTML="";
+  $("grid-center-label").textContent="Laden...";
+  for(let i=0;i<optCount;i++){
+    const el=document.createElement("div");
+    el.className="grid-option loading-cell";
+    el.innerHTML=`<div class="dots"><span></span><span></span><span></span></div>`;
+    $("options-grid").appendChild(el);
+  }
+}
+function renderOptionsGrid(context,options,parentWord){
+  $("options-grid").innerHTML="";
+  const label=parentWord||context||"\u2014";
+  $("grid-center-label").textContent=label.length>60?label.slice(0,57)+"...":label;
+  options.forEach((txt,i)=>{
+    const el=document.createElement("div");
+    el.className="grid-option";
+    el.style.animationDelay=(i*0.06)+"s";
+    el.textContent=txt;
+    el.addEventListener("click",()=>selectOption(txt,el));
+    el.addEventListener("touchend",e=>{e.preventDefault();selectOption(txt,el);});
+    $("options-grid").appendChild(el);
+  });
+  updateBreadcrumb();
+}
+function applyLayoutMode(){
+  const g=layoutMode==="grid";
+  $("ring-area").style.display=g?"none":"";
+  $("grid-section").style.display=g?"flex":"none";
+  const lb=$("layout-btn");
+  lb.textContent=g?"\u25cf":"\u229e";
+  lb.title=g?"Ring-weergave":"Raster-weergave";
+  g?lb.classList.add("active-mode"):lb.classList.remove("active-mode");
+}
+function toggleLayout(){
+  layoutMode=layoutMode==="ring"?"grid":"ring";
+  applyLayoutMode();
+  if(lastOptions.length) renderOptions(currentCtx,lastOptions,breadcrumb[breadcrumb.length-1]||null);
+}
+function toggleSidebar(){
+  sidebarHidden=!sidebarHidden;
+  sidebarHidden?$("sidebar").classList.add("sb-hidden"):$("sidebar").classList.remove("sb-hidden");
+  sidebarHidden?$("chat-btn").classList.remove("active-mode"):$("chat-btn").classList.add("active-mode");
+}
+function toggleFullscreen(){
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{});
+    $("fs-btn").textContent="\u2715";
+  } else {
+    document.exitFullscreen();
+    $("fs-btn").textContent="\u26f6";
+  }
+}
 function renderInit(){
   // Show real options straight away — no mic needed to start
   currentCtx = "gesprek gestart";
@@ -1062,6 +1154,9 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   }
 }).catch(()=>{});
 
+applyLayoutMode();
+if(sidebarHidden)$("sidebar").classList.add("sb-hidden");
+else $("chat-btn").classList.add("active-mode");
 renderInit();
 </script>
 </body>
