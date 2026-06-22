@@ -630,14 +630,14 @@ body{
 
     <label>Stem</label>
     <select id="voice-select">
-      <option value="">Laden...</option>
-    </select>
-
-    <label>Spreeksnelheid</label>
-    <select id="speed-select">
-      <option value="normal">Normaal</option>
-      <option value="slow">Langzamer</option>
-      <option value="fast">Sneller</option>
+      <option value="vrouw-normaal">♀ Vrouw — normaal</option>
+      <option value="vrouw-langzaam">♀ Vrouw — langzaam</option>
+      <option value="vrouw-snel">♀ Vrouw — snel</option>
+      <option value="man-normaal">♂ Man — normaal</option>
+      <option value="man-langzaam">♂ Man — langzaam</option>
+      <option value="man-snel">♂ Man — snel</option>
+      <option value="tiener">🧑 Tiener / jonger</option>
+      <option value="kind">🧒 Kind</option>
     </select>
 
     <p class="settings-note">
@@ -659,8 +659,7 @@ body{
 let apiKey       = localStorage.getItem("sk_key")    || "";
 let language     = localStorage.getItem("sk_lang")   || "nl-NL";
 let optCount     = parseInt(localStorage.getItem("sk_count") || "6");
-let voiceName    = localStorage.getItem("sk_voice_name") || "";
-let voiceSpeed   = localStorage.getItem("sk_speed")      || "normal";
+let voicePreset  = localStorage.getItem("sk_voice") || "vrouw-normaal";
 let speechOn     = localStorage.getItem("sk_speech") !== "off";
 let conversation = [];           // [{speaker,text}]
 let recognition  = null;
@@ -673,6 +672,7 @@ let layoutMode   = window.innerWidth < 640 ? "grid" : "ring";
 let sidebarHidden= window.innerWidth < 640;
 let silenceTimer = null;
 let accTranscript= "";
+let serverHasKey = false;
 
 // ════════════════════════════════════════════════
 // Helpers
@@ -737,24 +737,30 @@ function initRecognition(){
 
   recognition.onstart  = ()=>{ isListening=true; updateMicUI(); setStatus("🎙️ Aan het luisteren…"); };
   recognition.onerror  = e=>{ if(e.error!=="no-speech") console.warn("SR error:",e.error); };
-  recognition.onend    = ()=>{ if(isListening){ try{ recognition.start() }catch(_){} } };
+  recognition.onend    = ()=>{
+    if(isListening){
+      if(_sf&&_sf.trim()){ accTranscript += _sf; _sf=""; }
+      try{ recognition.start() }catch(_){}
+    }
+  };
+
+  let _sf = ""; // finals van huidige sessie (reset bij herstart)
 
   recognition.onresult = evt =>{
-    // Lees ALLE resultaten opnieuw op — voorkomt dubbele tekst op mobiel
-    let full="", interim="";
+    _sf = "";
+    let interim = "";
     for(let i=0; i<evt.results.length; i++){
-      if(evt.results[i].isFinal) full += evt.results[i][0].transcript+" ";
+      if(evt.results[i].isFinal) _sf += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    const display = (full + interim).trim();
+    const display = (accTranscript + _sf + interim).trim();
     if(display) $("heard-text").textContent = display;
 
-    // Wacht op stilte voor verwerking
     clearTimeout(silenceTimer);
-    const delay = window.innerWidth < 640 ? 1500 : 900;
+    const delay = window.innerWidth < 640 ? 1600 : 950;
     silenceTimer = setTimeout(()=>{
-      const t = (full || interim).trim();
-      if(t){ $("heard-text").textContent=t; handleHeard(t); }
+      const t = (accTranscript + _sf + interim).trim();
+      if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
     }, delay);
   };
   return true;
@@ -847,7 +853,7 @@ async function generateOptions(context, parentWord){
     const opts = data.suggestions || getFallback();
     lastOptions = opts;
     renderOptions(context, opts, parentWord);
-    setStatus(apiKey ? "Tik om te zeggen · tik nogmaals voor meer opties" : "💡 Voeg API-sleutel toe via ⚙️ voor slimmere opties");
+    setStatus((apiKey||serverHasKey) ? "Tik om te zeggen · tik nogmaals voor meer opties" : "ℹ️ Geen API-sleutel — standaard-opties actief");
   } catch(e){
     const opts = getFallback();
     lastOptions = opts;
@@ -1052,32 +1058,41 @@ function updateSpeechBtn(){
 // TTS
 // ════════════════════════════════════════════════
 
-const SPEED_RATES = { normal: 0.88, slow: 0.68, fast: 1.18 };
+const MALE_KW   = ["male","man","maarten","guy","david","mark","paul","thomas","koen","xander"];
+const FEMALE_KW = ["female","woman","fenna","zira","eva","anna","lotte","claire","ellen","lisa","samantha"];
+const VOICE_PRESETS = {
+  "vrouw-normaal" : { rate:0.88, pitch:1.10, gender:"female" },
+  "vrouw-langzaam": { rate:0.68, pitch:1.05, gender:"female" },
+  "vrouw-snel"    : { rate:1.18, pitch:1.15, gender:"female" },
+  "man-normaal"   : { rate:0.82, pitch:0.76, gender:"male"   },
+  "man-langzaam"  : { rate:0.65, pitch:0.72, gender:"male"   },
+  "man-snel"      : { rate:1.10, pitch:0.80, gender:"male"   },
+  "tiener"        : { rate:0.98, pitch:1.28, gender:"female" },
+  "kind"          : { rate:1.05, pitch:1.58, gender:"female" },
+};
 
 function speak(text, onEnd){
   if(!window.speechSynthesis || !speechOn){ onEnd&&onEnd(); return; }
   isSpeaking = true;
   window.speechSynthesis.cancel();
 
-  const utt  = new SpeechSynthesisUtterance(text);
-  utt.rate   = SPEED_RATES[voiceSpeed] || 0.88;
-  utt.pitch  = voiceSpeed==="slow" ? 0.95 : 1.0;
+  const utt    = new SpeechSynthesisUtterance(text);
+  const preset = VOICE_PRESETS[voicePreset] || VOICE_PRESETS["vrouw-normaal"];
+  utt.rate  = preset.rate;
+  utt.pitch = preset.pitch;
+  utt.lang  = language;
 
   const voices = window.speechSynthesis.getVoices();
-  utt.lang = language;
-
-  // Gebruik gekozen stem als die beschikbaar is
-  if(voiceName){
-    const chosen = voices.find(v=>v.name===voiceName);
-    if(chosen){ utt.voice = chosen; }
+  const lang2  = language.split("-")[0];
+  const pool   = voices.filter(v=> v.lang===language || v.lang.startsWith(lang2));
+  let chosen = null;
+  if(preset.gender==="male"){
+    chosen = pool.find(v=> MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+  } else {
+    chosen = pool.find(v=> FEMALE_KW.some(k=> v.name.toLowerCase().includes(k)));
   }
-  // Terugval op lokale/beschikbare stem alleen als er geen specifieke stem gekozen is
-  if(!voiceName || !utt.voice){
-    const local = voices.find(v=>v.lang===language && v.localService);
-    const any   = voices.find(v=>v.lang.startsWith(language.split("-")[0]));
-    if(local) utt.voice = local;
-    else if(any) utt.voice = any;
-  }
+  if(!chosen) chosen = pool[0]||null;
+  if(chosen) utt.voice = chosen;
 
   utt.onend = utt.onerror = ()=>{ isSpeaking=false; onEnd&&onEnd(); };
   window.speechSynthesis.speak(utt);
@@ -1086,37 +1101,6 @@ function speak(text, onEnd){
 // ════════════════════════════════════════════════
 // Settings
 // ════════════════════════════════════════════════
-function populateVoiceSelect(){
-  const sel = $("voice-select");
-  const voices = window.speechSynthesis.getVoices();
-  // Filter op taal en sorteer: lokale stemmen eerst, dan online
-  const lang2 = language.split("-")[0];
-  const matching = voices.filter(v => v.lang===language || v.lang.startsWith(lang2));
-  const others   = voices.filter(v => !matching.includes(v));
-  const list = [...matching, ...others];
-
-  sel.innerHTML = "";
-  if(list.length === 0){
-    sel.innerHTML = `<option value="">Geen stemmen gevonden</option>`;
-    return;
-  }
-  list.forEach(v => {
-    const opt = document.createElement("option");
-    opt.value = v.name;
-    // Probeer geslacht te raden uit naam
-    const nm = v.name.toLowerCase();
-    const gender = nm.includes("male") || nm.includes("man") || nm.includes("maarten") || nm.includes("guy") || nm.includes("david") || nm.includes("mark") || nm.includes("paul") ? "♂" :
-                   nm.includes("female") || nm.includes("woman") || nm.includes("fenna") || nm.includes("zira") || nm.includes("eva") || nm.includes("anna") || nm.includes("lotte") ? "♀" : "◎";
-    const local = v.localService ? " ⚡" : "";
-    const tag   = (v.lang === language) ? " ✓" : "";
-    opt.textContent = `${gender} ${v.name}${local}${tag}`;
-    if(v.name === voiceName) opt.selected = true;
-    sel.appendChild(opt);
-  });
-  // Als niets geselecteerd, kies eerste match
-  if(!voiceName && matching.length > 0) sel.value = matching[0].name;
-}
-
 function toggleSettings(){
   const m = $("settings-modal");
   if(m.classList.contains("open")){
@@ -1125,8 +1109,7 @@ function toggleSettings(){
     $("api-key-input").value  = apiKey;
     $("lang-select").value    = language;
     $("count-select").value   = optCount;
-    populateVoiceSelect();
-    $("speed-select").value    = voiceSpeed;
+    $("voice-select").value = voicePreset;
     m.classList.add("open");
   }
 }
@@ -1135,13 +1118,11 @@ function saveSettings(){
   apiKey      = $("api-key-input").value.trim();
   language    = $("lang-select").value;
   optCount    = parseInt($("count-select").value);
-  voiceName  = $("voice-select").value;
-  voiceSpeed = $("speed-select").value;
+  voicePreset = $("voice-select").value;
   localStorage.setItem("sk_key",    apiKey);
   localStorage.setItem("sk_lang",   language);
   localStorage.setItem("sk_count",  optCount);
-  localStorage.setItem("sk_voice_name", voiceName);
-  localStorage.setItem("sk_speed",      voiceSpeed);
+  localStorage.setItem("sk_voice", voicePreset);
   if(recognition) recognition.lang = language;
   toggleSettings();
 
@@ -1188,14 +1169,15 @@ window.addEventListener("resize",()=>{
 // ════════════════════════════════════════════════
 // Init
 // ════════════════════════════════════════════════
-window.speechSynthesis.onvoiceschanged = ()=>{ if($("settings-modal").classList.contains("open")) populateVoiceSelect(); };
+window.speechSynthesis.onvoiceschanged = ()=>{};
 window.speechSynthesis.getVoices();
 updateSpeechBtn();
 
 // Check server key status, then render initial options
 fetch('/api/status').then(r=>r.json()).then(d=>{
-  if(!d.has_key && !apiKey){
-    setStatus("💡 Zet je API-sleutel in api_key.txt voor slimme suggesties");
+  serverHasKey = !!d.has_key;
+  if(!serverHasKey && !apiKey){
+    setStatus("ℹ️ Voeg een API-sleutel toe via ⚙️ voor slimme AI-suggesties");
   }
 }).catch(()=>{});
 
