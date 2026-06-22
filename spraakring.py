@@ -106,7 +106,6 @@ def api_tts():
     text    = data.get("text", "").strip()
     voice_id= data.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
     el_key  = data.get("el_key", "").strip() or SERVER_EL_KEY
-    speed   = float(data.get("speed", 1.0))
     if not el_key or not text:
         return jsonify({"error": "geen sleutel of tekst"}), 400
     payload = json.dumps({
@@ -806,6 +805,8 @@ function toggleMic(){
   if(isListening){
     isListening = false;
     recognition.stop();
+    clearTimeout(silenceTimer);
+    accTranscript = "";
     updateMicUI();
     setStatus("Luisteren gestopt");
   } else {
@@ -1117,16 +1118,45 @@ const VOICE_PRESETS = {
   "kind"          : { rate:1.05, pitch:1.26, gender:"female" },
 };
 
+// ── Browser TTS (fallback) ──
 function speakBrowser(text, onEnd){
   if(!window.speechSynthesis || !speechOn){ onEnd&&onEnd(); return; }
+  isSpeaking = true;
+  window.speechSynthesis.cancel();
 
+  const utt    = new SpeechSynthesisUtterance(text);
+  const preset = VOICE_PRESETS[voicePreset] || VOICE_PRESETS["vrouw-normaal"];
+  utt.rate = preset.rate;
+  utt.lang = language;
+
+  const voices = window.speechSynthesis.getVoices();
+  const lang2  = language.split("-")[0];
+  const pool   = voices.filter(v=> v.lang===language || v.lang.startsWith(lang2));
+  const isNatural = v => /natural|neural|online/i.test(v.name);
+
+  let chosen = null;
+  if(preset.gender==="male"){
+    chosen = pool.find(v=> MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+  }
+  if(!chosen){
+    chosen = pool.find(v=> isNatural(v) && !MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+    if(!chosen) chosen = pool.find(v=> FEMALE_KW.some(k=> v.name.toLowerCase().includes(k)));
+    if(!chosen) chosen = pool[0]||null;
+  }
+  if(chosen) utt.voice = chosen;
+  utt.pitch = (chosen && isNatural(chosen)) ? 1.0 : preset.pitch;
+
+  utt.onend = utt.onerror = ()=>{ isSpeaking=false; onEnd&&onEnd(); };
+  window.speechSynthesis.speak(utt);
+}
+
+// ── ElevenLabs TTS ──
 async function speakEL(text, onEnd){
   if(!elKey && !serverElKey){ speakBrowser(text, onEnd); return; }
   isSpeaking = true;
   const key = elKey || "";
   const ev  = EL_VOICES[voicePreset] || EL_VOICES["vrouw-normaal"];
 
-  // Veiligheidsklep: als iets misgaat, reset isSpeaking na 15s
   const watchdog = setTimeout(()=>{ isSpeaking=false; onEnd&&onEnd(); }, 15000);
   const done = (callOnEnd=true)=>{ clearTimeout(watchdog); isSpeaking=false; if(callOnEnd) onEnd&&onEnd(); };
 
@@ -1157,44 +1187,10 @@ async function speakEL(text, onEnd){
   }
 }
 
+// ── Dispatcher ──
 function speak(text, onEnd){
   if((elKey||serverElKey) && speechOn) speakEL(text, onEnd);
   else speakBrowser(text, onEnd);
-}
-
-  isSpeaking = true;
-  window.speechSynthesis.cancel();
-
-  const utt    = new SpeechSynthesisUtterance(text);
-  const preset = VOICE_PRESETS[voicePreset] || VOICE_PRESETS["vrouw-normaal"];
-  utt.rate = preset.rate;
-  utt.lang = language;
-
-  const voices = window.speechSynthesis.getVoices();
-  const lang2  = language.split("-")[0];
-  const pool   = voices.filter(v=> v.lang===language || v.lang.startsWith(lang2));
-
-  // Natural/Neural stemmen klinken het best — maar NIET vervormen met pitch
-  const isNatural = v => /natural|neural|online/i.test(v.name);
-
-  let chosen = null;
-  if(preset.gender==="male"){
-    // Probeer echte mannenstem
-    chosen = pool.find(v=> MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
-  }
-  if(!chosen){
-    // Verkies Natural-stemmen boven generieke
-    chosen = pool.find(v=> isNatural(v) && !MALE_KW.some(k=> v.name.toLowerCase().includes(k)));
-    if(!chosen) chosen = pool.find(v=> FEMALE_KW.some(k=> v.name.toLowerCase().includes(k)));
-    if(!chosen) chosen = pool[0]||null;
-  }
-  if(chosen) utt.voice = chosen;
-
-  // Natural/Neural stemmen klinken robotachtig bij pitch-aanpassing — laat ze met rust
-  utt.pitch = (chosen && isNatural(chosen)) ? 1.0 : preset.pitch;
-
-  utt.onend = utt.onerror = ()=>{ isSpeaking=false; onEnd&&onEnd(); };
-  window.speechSynthesis.speak(utt);
 }
 
 // ════════════════════════════════════════════════
