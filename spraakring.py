@@ -112,7 +112,7 @@ def api_tts():
     payload = json.dumps({
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "speed": speed}
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
     }).encode()
     req = urllib.request.Request(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
@@ -1125,24 +1125,33 @@ async function speakEL(text, onEnd){
   isSpeaking = true;
   const key = elKey || "";
   const ev  = EL_VOICES[voicePreset] || EL_VOICES["vrouw-normaal"];
+
+  // Veiligheidsklep: als iets misgaat, reset isSpeaking na 15s
+  const watchdog = setTimeout(()=>{ isSpeaking=false; onEnd&&onEnd(); }, 15000);
+  const done = (callOnEnd=true)=>{ clearTimeout(watchdog); isSpeaking=false; if(callOnEnd) onEnd&&onEnd(); };
+
   try{
     const res = await fetch("/api/tts",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ text, voice_id: ev.id, el_key: key, speed: ev.speed })
+      body: JSON.stringify({ text, voice_id: ev.id, el_key: key })
     });
     const d = await res.json();
     if(d.error || !d.audio) throw new Error(d.error||"geen audio");
+
     const bytes = atob(d.audio);
     const arr   = new Uint8Array(bytes.length);
     for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
     const blob  = new Blob([arr],{type:"audio/mpeg"});
     const url   = URL.createObjectURL(blob);
     const aud   = new Audio(url);
-    aud.onended = aud.onerror = ()=>{ isSpeaking=false; URL.revokeObjectURL(url); onEnd&&onEnd(); };
-    aud.play();
+    aud.onended = ()=>{ URL.revokeObjectURL(url); done(); };
+    aud.onerror = ()=>{ URL.revokeObjectURL(url); done(); };
+    const p = aud.play();
+    if(p && p.catch) p.catch(e=>{ console.warn("play() geweigerd:",e); done(); speakBrowser(text,null); });
   }catch(e){
     console.warn("EL TTS mislukt:",e);
+    done(false);
     isSpeaking=false;
     speakBrowser(text,onEnd);
   }
