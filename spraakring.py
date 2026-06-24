@@ -766,10 +766,10 @@ function initRecognition(){
   }
   recognition = new SR();
   recognition.lang = language;
-  // Mobiel: continuous=false (browser handelt pauze zelf af, geen sessie-overlap)
-  // Desktop: continuous=true met silence timer
+  // continuous=true altijd: voorkomt start/stop-bliepjes bij elke zin
+  // Mobiel: accTranscript NIET gebruiken (anders sessie-overlap → herhaling)
   const _isMobile = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
-  recognition.continuous = !_isMobile;
+  recognition.continuous = true;
   recognition.interimResults = true;
 
   recognition.onstart  = ()=>{ isListening=true; updateMicUI(); setStatus("🎙️ Aan het luisteren…"); };
@@ -783,8 +783,8 @@ function initRecognition(){
       const final = _sf.trim();
       _sf = "";
       if(_isMobile){
-        // Mobiel: verwerk direct wat gezegd is, dan herstart
-        if(final){ $("heard-text").textContent = final; handleHeard(final); }
+        // Mobiel: verwerk direct, geen cross-sessie accumulatie
+        if(final) handleHeard(final);
       } else {
         // Desktop: sla op in accTranscript (silence timer verwerkt het)
         if(final) accTranscript += final + " ";
@@ -800,8 +800,10 @@ function initRecognition(){
       if(evt.results[i].isFinal) _sf += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    const display = (_isMobile ? _sf : (accTranscript + _sf)) + interim;
-    if(display.trim()) $("heard-text").textContent = display.trim();
+    // Mobiel: toon alleen huidige sessie (geen accTranscript = geen dubbeling)
+    // Desktop: toon accumulatie + huidige sessie
+    const display = (_isMobile ? (_sf + interim) : (accTranscript + _sf + interim)).trim();
+    if(display) $("heard-text").textContent = display;
 
     // Desktop: silence timer triggert handleHeard
     if(!_isMobile){
@@ -811,7 +813,14 @@ function initRecognition(){
         if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
       }, 950);
     }
-    // Mobiel: geen silence timer, onend doet het werk
+    // Mobiel: silence timer ook, als backup (bijv. als onend niet goed vuurt)
+    else {
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(()=>{
+        const t = (_sf + interim).trim();
+        if(t){ _sf=""; $("heard-text").textContent=t; handleHeard(t); }
+      }, 1800);
+    }
   };
   return true;
 }
