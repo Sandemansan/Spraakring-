@@ -766,19 +766,32 @@ function initRecognition(){
   }
   recognition = new SR();
   recognition.lang = language;
-  recognition.continuous = true;
+  // Mobiel: continuous=false (browser handelt pauze zelf af, geen sessie-overlap)
+  // Desktop: continuous=true met silence timer
+  const _isMobile = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
+  recognition.continuous = !_isMobile;
   recognition.interimResults = true;
 
   recognition.onstart  = ()=>{ isListening=true; updateMicUI(); setStatus("🎙️ Aan het luisteren…"); };
   recognition.onerror  = e=>{ if(e.error!=="no-speech") console.warn("SR error:",e.error); };
-  recognition.onend    = ()=>{
+
+  let _sf = ""; // finals van huidige sessie
+
+  recognition.onend = ()=>{
     if(isListening){
-      if(_sf&&_sf.trim()){ accTranscript += _sf; _sf=""; }
-      try{ recognition.start() }catch(_){}
+      clearTimeout(silenceTimer);
+      const final = _sf.trim();
+      _sf = "";
+      if(_isMobile){
+        // Mobiel: verwerk direct wat gezegd is, dan herstart
+        if(final){ $("heard-text").textContent = final; handleHeard(final); }
+      } else {
+        // Desktop: sla op in accTranscript (silence timer verwerkt het)
+        if(final) accTranscript += final + " ";
+      }
+      try{ recognition.start(); }catch(_){}
     }
   };
-
-  let _sf = ""; // finals van huidige sessie (reset bij herstart)
 
   recognition.onresult = evt =>{
     _sf = "";
@@ -787,15 +800,18 @@ function initRecognition(){
       if(evt.results[i].isFinal) _sf += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    const display = (accTranscript + _sf + interim).trim();
-    if(display) $("heard-text").textContent = display;
+    const display = (_isMobile ? _sf : (accTranscript + _sf)) + interim;
+    if(display.trim()) $("heard-text").textContent = display.trim();
 
-    clearTimeout(silenceTimer);
-    const delay = window.innerWidth < 640 ? 1600 : 950;
-    silenceTimer = setTimeout(()=>{
-      const t = (accTranscript + _sf + interim).trim();
-      if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
-    }, delay);
+    // Desktop: silence timer triggert handleHeard
+    if(!_isMobile){
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(()=>{
+        const t = (accTranscript + _sf + interim).trim();
+        if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
+      }, 950);
+    }
+    // Mobiel: geen silence timer, onend doet het werk
   };
   return true;
 }
