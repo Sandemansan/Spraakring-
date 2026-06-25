@@ -859,7 +859,7 @@ let _mrAnimId   = null;
 let _mrAudioCtx = null;
 let _useGroq    = false;  // wordt true als Groq beschikbaar is op mobiel
 
-async async function _mrInit(){
+async function _mrInit(){
   _mrStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
   if(_mrAudioCtx) try{ _mrAudioCtx.close(); }catch(_){}
   _mrAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
