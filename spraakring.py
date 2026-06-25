@@ -856,11 +856,14 @@ let _mrAnalyser = null;
 let _mrSpeaking = false;
 let _mrSilTimer = null;
 let _mrAnimId   = null;
+let _mrAudioCtx = null;
 let _useGroq    = false;  // wordt true als Groq beschikbaar is op mobiel
 
-async function _mrInit(){
+async async function _mrInit(){
   _mrStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if(_mrAudioCtx) try{ _mrAudioCtx.close(); }catch(_){}
+  _mrAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const ctx = _mrAudioCtx;
   const src = ctx.createMediaStreamSource(_mrStream);
   _mrAnalyser = ctx.createAnalyser();
   _mrAnalyser.fftSize = 512;
@@ -921,6 +924,7 @@ function _mrStop(){
   if(_mrRecorder && _mrRecorder.state!=="inactive") _mrRecorder.stop();
   if(_mrStream){ _mrStream.getTracks().forEach(t=>t.stop()); _mrStream=null; }
   _mrAnalyser = null; _mrRecorder = null; _mrSpeaking = false;
+  if(_mrAudioCtx) try{ _mrAudioCtx.close(); _mrAudioCtx=null; }catch(_){}
 }
 
 // ── Hoofd toggle ──────────────────────────────────────────────────────────────
