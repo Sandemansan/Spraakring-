@@ -183,7 +183,7 @@ Iemand heeft zojuist gezegd: "{context}"
 Genereer precies {count} eerste ANTWOORDOPTIES die deze persoon zou kunnen zeggen.
 Regels:
 - Maximaal 5 woorden per optie
-- Gevarieerd: emoties, vragen, bevestigingen, opmerkingen, humor
+- Gevarieerd: minstens 1-2 negatieve/eerlijke reacties (zoals "Niet zo goed", "Ik voel me moe", "Dat vind ik minder"), én positieve, humoristische, vragend
 - Passend bij de context
 - Volledig in {lang_name}
 
@@ -847,6 +847,8 @@ function updateMicUI(){
   const btn   = $("mic-btn");
   const icon  = $("mic-icon");
   const label = $("mic-label");
+  // Stille feedback: trilling in plaats van bliep
+  if(navigator.vibrate) navigator.vibrate(isListening ? [30] : [15, 30, 15]);
   if(isListening){
     btn.classList.add("active");
     label.textContent = "Stop";
@@ -865,7 +867,14 @@ function updateMicUI(){
 // ════════════════════════════════════════════════
 // Conversation logic
 // ════════════════════════════════════════════════
+let _lastHandledAt = 0;
 function handleHeard(text){
+  // Negeer duplicaten: als dezelfde tekst al binnen 3s verwerkt is, skip
+  const now = Date.now();
+  if(now - _lastHandledAt < 3000) return;
+  _lastHandledAt = now;
+  // Korte trilling als stille bevestiging
+  if(navigator.vibrate) navigator.vibrate(40);
   currentCtx = text;
   breadcrumb = [];
   addToTranscript("other", text);
