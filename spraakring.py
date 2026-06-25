@@ -767,15 +767,14 @@ function initRecognition(){
   }
   recognition = new SR();
   recognition.lang = language;
-  // continuous=true altijd: voorkomt start/stop-bliepjes bij elke zin
-  // Mobiel: accTranscript NIET gebruiken (anders sessie-overlap → herhaling)
+  // Mobiel: continuous=false → browser stopt na elke pauze, geen sessie-overlap
+  // Desktop: continuous=true met silence timer
   const _isMobile = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
-  recognition.continuous = true;
+  recognition.continuous = !_isMobile;
   recognition.interimResults = true;
 
   recognition.onstart  = ()=>{ isListening=true; updateMicUI(); setStatus("🎙️ Aan het luisteren…"); };
   recognition.onerror  = e=>{ if(e.error!=="no-speech") console.warn("SR error:",e.error); };
-
 
   recognition.onend = ()=>{
     if(isListening){
@@ -783,7 +782,6 @@ function initRecognition(){
       const final = _sf.trim();
       _sf = "";
       if(_isMobile){
-        // Mobiel: verwerk alleen als niet in cooldown
         if(final) handleHeard(final);
       } else {
         if(final) accTranscript += final + " ";
@@ -791,7 +789,6 @@ function initRecognition(){
       try{ recognition.start(); }catch(_){}
     }
   };
-
 
   recognition.onresult = evt =>{
     _sf = "";
@@ -809,13 +806,8 @@ function initRecognition(){
         const t = (accTranscript + _sf + interim).trim();
         if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
       }, 950);
-    } else {
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(()=>{
-        const t = (_sf + interim).trim();
-        if(t){ _sf=""; $("heard-text").textContent=t; handleHeard(t); }
-      }, 1800);
     }
+    // Mobiel: geen silence timer — onend verwerkt de zin na de pauze
   };
   return true;
 }
