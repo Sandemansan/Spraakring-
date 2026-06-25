@@ -705,7 +705,6 @@ let sidebarHidden= window.innerWidth < 640;
 let silenceTimer = null;
 let accTranscript= "";
 let _sf          = "";   // finals van huidige herkenningssessie
-let _ignoreUntil = 0;    // cooldown na handleHeard
 let serverHasKey = false;
 let serverElKey  = false;
 let elKey        = localStorage.getItem("sk_el_key") || "";
@@ -785,7 +784,7 @@ function initRecognition(){
       _sf = "";
       if(_isMobile){
         // Mobiel: verwerk alleen als niet in cooldown
-        if(final && Date.now() >= _ignoreUntil) handleHeard(final);
+        if(final) handleHeard(final);
       } else {
         if(final) accTranscript += final + " ";
       }
@@ -795,9 +794,6 @@ function initRecognition(){
 
 
   recognition.onresult = evt =>{
-    // Negeer onresult volledig tijdens cooldown (Chrome herhaalt anders oude audio)
-    if(_isMobile && Date.now() < _ignoreUntil){ _sf=""; return; }
-
     _sf = "";
     let interim = "";
     for(let i=0; i<evt.results.length; i++){
@@ -824,24 +820,6 @@ function initRecognition(){
   return true;
 }
 
-// Houd microfoon stil open zodat Chrome geen audio-mode-switch doet (= geen piepje)
-let _silentStream = null;
-let _silentCtx    = null;
-
-async function warmMic(){
-  if(_silentStream) return;
-  try{
-    _silentStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-    _silentCtx    = new (window.AudioContext || window.webkitAudioContext)();
-    // Verbind stream aan ctx maar NIET aan destination → verwerkt audio zonder uitvoer
-    const src  = _silentCtx.createMediaStreamSource(_silentStream);
-    const gain = _silentCtx.createGain();
-    gain.gain.value = 0;
-    src.connect(gain);
-    // gain NIET aan destination koppelen → absoluut stil
-  } catch(e){ console.log("warmMic:", e); }
-}
-
 function toggleMic(){
   if(!recognition && !initRecognition()) return;
   if(isListening){
@@ -852,16 +830,11 @@ function toggleMic(){
     updateMicUI();
     setStatus("Luisteren gestopt");
   } else {
-    // Warm de mic op (onderdrukt piepje) en start dan herkenning
-    warmMic().finally(()=>{
-      isListening = true;
-      updateMicUI();
-      try{ recognition.start(); }catch(_){
-        recognition=null; initRecognition();
-        try{ recognition.start(); }catch(e2){}
-      }
-    });
-    return; // updateMicUI wordt hierboven al aangeroepen
+    isListening = true;
+    try{ recognition.start(); }catch(_){
+      recognition=null; initRecognition();
+      try{ recognition.start(); }catch(e2){}
+    }
   }
 }
 
@@ -890,9 +863,6 @@ function updateMicUI(){
 // Conversation logic
 // ════════════════════════════════════════════════
 function handleHeard(text){
-  // Stel cooldown in: 3s geen onresult-verwerking (voorkomt Chrome audio-replay)
-  const _mob = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
-  _ignoreUntil = _mob ? Date.now() + 3000 : 0;
   clearTimeout(silenceTimer);
   _sf = "";
   if(navigator.vibrate) navigator.vibrate(40);
