@@ -885,16 +885,21 @@ function _mrStartSession(){
       setStatus("⏳ Verwerken…");
       try{
         const lang = (language||"nl-NL").split("-")[0];
-        const res  = await fetch(\`/api/transcribe?lang=\${lang}\`, {
-          method:"POST", body:blob,
-          headers:{"Content-Type": blob.type || "audio/webm"}
-        });
-        const d = await res.json();
-        if(d.text && d.text.trim()){
-          $("heard-text").textContent = d.text.trim();
-          handleHeard(d.text.trim());
-        } else { setStatus("🎙️ Aan het luisteren…"); }
-      } catch(e){ console.warn("transcribe:", e); setStatus("🎙️ Aan het luisteren…"); }
+        const _tx = async (b, n=0) => {
+          const r2 = await fetch(\`/api/transcribe?lang=\${lang}\`,{
+            method:"POST", body:b,
+            headers:{"Content-Type": b.type||"audio/webm"}
+          });
+          const d = await r2.json();
+          if(d.text && d.text.trim()){
+            $("heard-text").textContent = d.text.trim();
+            handleHeard(d.text.trim());
+          } else if(n===0){
+            await new Promise(r=>setTimeout(r,800)); await _tx(b,1);
+          } else { setStatus("🎙️ Aan het luisteren…"); }
+        };
+        await _tx(blob);
+      } catch(e){ console.warn("transcribe:",e); setStatus("🎙️ Aan het luisteren…"); }
     }
     if(isListening) _mrStartSession();
   };
@@ -1181,7 +1186,19 @@ function applyLayoutMode(){
 }
 function toggleLayout(){
   layoutMode=layoutMode==="ring"?"grid":"ring";
-  applyLayoutMode();
+  // Screen wakeLock: voorkomt dimmen tijdens gebruik
+let _wakeLock = null;
+async function _acquireWakeLock(){
+  try{
+    if(navigator.wakeLock) _wakeLock = await navigator.wakeLock.request("screen");
+  }catch(_){}
+}
+_acquireWakeLock();
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState==="visible") _acquireWakeLock();
+});
+
+applyLayoutMode();
   if(lastOptions.length) renderOptions(currentCtx,lastOptions,breadcrumb[breadcrumb.length-1]||null);
 }
 function toggleSidebar(){
