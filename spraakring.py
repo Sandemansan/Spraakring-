@@ -394,7 +394,7 @@ body{
 #mic-btn{
   display:flex;align-items:center;gap:8px;
   padding:9px 18px;border:none;border-radius:24px;
-  background:linear-gradient(135deg,#1a3a5c,#2a5080);
+  background:linear-gradient(135deg,#1a5c4a,#2a8060);
   color:#fff;font-size:14px;font-weight:600;
   cursor:pointer;transition:all .25s;flex-shrink:0;
 }
