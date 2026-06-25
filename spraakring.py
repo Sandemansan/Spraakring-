@@ -704,6 +704,8 @@ let layoutMode   = window.innerWidth < 640 ? "grid" : "ring";
 let sidebarHidden= window.innerWidth < 640;
 let silenceTimer = null;
 let accTranscript= "";
+let _sf          = "";   // finals van huidige herkenningssessie
+let _ignoreUntil = 0;    // cooldown na handleHeard
 let serverHasKey = false;
 let serverElKey  = false;
 let elKey        = localStorage.getItem("sk_el_key") || "";
@@ -775,7 +777,6 @@ function initRecognition(){
   recognition.onstart  = ()=>{ isListening=true; updateMicUI(); setStatus("🎙️ Aan het luisteren…"); };
   recognition.onerror  = e=>{ if(e.error!=="no-speech") console.warn("SR error:",e.error); };
 
-  let _sf = ""; // finals van huidige sessie
 
   recognition.onend = ()=>{
     if(isListening){
@@ -792,11 +793,10 @@ function initRecognition(){
     }
   };
 
-  let _ignoreUntil = 0; // na handleHeard: negeer herhaalde audio
 
   recognition.onresult = evt =>{
     // Negeer onresult volledig tijdens cooldown (Chrome herhaalt anders oude audio)
-    if(Date.now() < _ignoreUntil){ _sf=""; return; }
+    if(_isMobile && Date.now() < _ignoreUntil){ _sf=""; return; }
 
     _sf = "";
     let interim = "";
@@ -891,7 +891,8 @@ function updateMicUI(){
 // ════════════════════════════════════════════════
 function handleHeard(text){
   // Stel cooldown in: 3s geen onresult-verwerking (voorkomt Chrome audio-replay)
-  _ignoreUntil = Date.now() + 3000;
+  const _mob = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
+  _ignoreUntil = _mob ? Date.now() + 3000 : 0;
   clearTimeout(silenceTimer);
   _sf = "";
   if(navigator.vibrate) navigator.vibrate(40);
