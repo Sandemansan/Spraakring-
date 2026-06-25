@@ -690,7 +690,7 @@ body{
 // ════════════════════════════════════════════════
 let apiKey       = localStorage.getItem("sk_key")    || "";
 let language     = localStorage.getItem("sk_lang")   || "nl-NL";
-let optCount     = parseInt(localStorage.getItem("sk_count") || "6");
+let optCount     = Math.max(6, parseInt(localStorage.getItem("sk_count") || "6"));
 let voicePreset  = localStorage.getItem("sk_voice") || "vrouw-normaal";
 let speechOn     = localStorage.getItem("sk_speech") !== "off";
 let conversation = [];           // [{speaker,text}]
@@ -783,38 +783,37 @@ function initRecognition(){
       const final = _sf.trim();
       _sf = "";
       if(_isMobile){
-        // Mobiel: verwerk direct, geen cross-sessie accumulatie
-        if(final) handleHeard(final);
+        // Mobiel: verwerk alleen als niet in cooldown
+        if(final && Date.now() >= _ignoreUntil) handleHeard(final);
       } else {
-        // Desktop: sla op in accTranscript (silence timer verwerkt het)
         if(final) accTranscript += final + " ";
       }
       try{ recognition.start(); }catch(_){}
     }
   };
 
+  let _ignoreUntil = 0; // na handleHeard: negeer herhaalde audio
+
   recognition.onresult = evt =>{
+    // Negeer onresult volledig tijdens cooldown (Chrome herhaalt anders oude audio)
+    if(Date.now() < _ignoreUntil){ _sf=""; return; }
+
     _sf = "";
     let interim = "";
     for(let i=0; i<evt.results.length; i++){
       if(evt.results[i].isFinal) _sf += evt.results[i][0].transcript+" ";
       else interim += evt.results[i][0].transcript;
     }
-    // Mobiel: toon alleen huidige sessie (geen accTranscript = geen dubbeling)
-    // Desktop: toon accumulatie + huidige sessie
     const display = (_isMobile ? (_sf + interim) : (accTranscript + _sf + interim)).trim();
     if(display) $("heard-text").textContent = display;
 
-    // Desktop: silence timer triggert handleHeard
     if(!_isMobile){
       clearTimeout(silenceTimer);
       silenceTimer = setTimeout(()=>{
         const t = (accTranscript + _sf + interim).trim();
         if(t){ accTranscript=""; _sf=""; $("heard-text").textContent=t; handleHeard(t); }
       }, 950);
-    }
-    // Mobiel: silence timer ook, als backup (bijv. als onend niet goed vuurt)
-    else {
+    } else {
       clearTimeout(silenceTimer);
       silenceTimer = setTimeout(()=>{
         const t = (_sf + interim).trim();
@@ -823,6 +822,24 @@ function initRecognition(){
     }
   };
   return true;
+}
+
+// Houd microfoon stil open zodat Chrome geen audio-mode-switch doet (= geen piepje)
+let _silentStream = null;
+let _silentCtx    = null;
+
+async function warmMic(){
+  if(_silentStream) return;
+  try{
+    _silentStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+    _silentCtx    = new (window.AudioContext || window.webkitAudioContext)();
+    // Verbind stream aan ctx maar NIET aan destination → verwerkt audio zonder uitvoer
+    const src  = _silentCtx.createMediaStreamSource(_silentStream);
+    const gain = _silentCtx.createGain();
+    gain.gain.value = 0;
+    src.connect(gain);
+    // gain NIET aan destination koppelen → absoluut stil
+  } catch(e){ console.log("warmMic:", e); }
 }
 
 function toggleMic(){
@@ -835,11 +852,16 @@ function toggleMic(){
     updateMicUI();
     setStatus("Luisteren gestopt");
   } else {
-    isListening = true;
-    try{ recognition.start(); }catch(_){
-      recognition=null; initRecognition();
-      try{ recognition.start(); }catch(e2){}
-    }
+    // Warm de mic op (onderdrukt piepje) en start dan herkenning
+    warmMic().finally(()=>{
+      isListening = true;
+      updateMicUI();
+      try{ recognition.start(); }catch(_){
+        recognition=null; initRecognition();
+        try{ recognition.start(); }catch(e2){}
+      }
+    });
+    return; // updateMicUI wordt hierboven al aangeroepen
   }
 }
 
@@ -867,13 +889,11 @@ function updateMicUI(){
 // ════════════════════════════════════════════════
 // Conversation logic
 // ════════════════════════════════════════════════
-let _lastHandledAt = 0;
 function handleHeard(text){
-  // Negeer duplicaten: als dezelfde tekst al binnen 3s verwerkt is, skip
-  const now = Date.now();
-  if(now - _lastHandledAt < 3000) return;
-  _lastHandledAt = now;
-  // Korte trilling als stille bevestiging
+  // Stel cooldown in: 3s geen onresult-verwerking (voorkomt Chrome audio-replay)
+  _ignoreUntil = Date.now() + 3000;
+  clearTimeout(silenceTimer);
+  _sf = "";
   if(navigator.vibrate) navigator.vibrate(40);
   currentCtx = text;
   breadcrumb = [];
