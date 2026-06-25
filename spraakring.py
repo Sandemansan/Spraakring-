@@ -43,6 +43,7 @@ def save_api_key(key):
 
 SERVER_API_KEY = load_api_key()
 SERVER_EL_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
+SERVER_GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # ──────────────────────────────────────────────
 # Fallback-opties (zonder API-sleutel)
@@ -129,7 +130,41 @@ def api_tts():
 
 @app.route("/api/status")
 def api_status():
-    return jsonify({"has_key": bool(SERVER_API_KEY), "has_el": bool(SERVER_EL_KEY)})
+    return jsonify({"has_key": bool(SERVER_API_KEY), "has_el": bool(SERVER_EL_KEY), "has_groq": bool(SERVER_GROQ_KEY)})
+
+@app.route("/api/transcribe", methods=["POST"])
+def transcribe():
+    """Stuur audio naar Groq Whisper en geef tekst terug."""
+    groq_key = request.headers.get("X-Groq-Key", "").strip() or SERVER_GROQ_KEY
+    if not groq_key:
+        return jsonify({"error": "geen groq sleutel"}), 400
+    audio_data = request.data
+    if not audio_data:
+        return jsonify({"error": "geen audio"}), 400
+    content_type = request.content_type or "audio/webm"
+    language = request.args.get("lang", "nl").split("-")[0]  # nl-NL → nl
+    boundary = "SpraaKringBoundary9z"
+    def part(name, value):
+        return (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").encode()
+    body = (
+        part("model", "whisper-large-v3") +
+        part("language", language) +
+        part("response_format", "json") +
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.webm\"\r\nContent-Type: {content_type}\r\n\r\n".encode() +
+        audio_data +
+        f"\r\n--{boundary}--\r\n".encode()
+    )
+    import urllib.request as _ur
+    req = _ur.Request("https://api.groq.com/openai/v1/audio/transcriptions",
+                      data=body, method="POST")
+    req.add_header("Authorization", f"Bearer {groq_key}")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    try:
+        with _ur.urlopen(req, timeout=30) as r:
+            result = json.loads(r.read())
+        return jsonify({"text": result.get("text", "").strip()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/suggest", methods=["POST"])
 def suggest():
@@ -707,6 +742,7 @@ let accTranscript= "";
 let _sf          = "";   // finals van huidige herkenningssessie
 let serverHasKey = false;
 let serverElKey  = false;
+let serverGroqKey= false;
 let elKey        = localStorage.getItem("sk_el_key") || "";
 
 // ════════════════════════════════════════════════
@@ -812,21 +848,121 @@ function initRecognition(){
   return true;
 }
 
+// ── MediaRecorder (Groq Whisper) – geen piepjes ──────────────────────────────
+let _mrStream   = null;
+let _mrRecorder = null;
+let _mrChunks   = [];
+let _mrAnalyser = null;
+let _mrSpeaking = false;
+let _mrSilTimer = null;
+let _mrAnimId   = null;
+let _useGroq    = false;  // wordt true als Groq beschikbaar is op mobiel
+
+async function _mrInit(){
+  _mrStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(_mrStream);
+  _mrAnalyser = ctx.createAnalyser();
+  _mrAnalyser.fftSize = 512;
+  src.connect(_mrAnalyser);
+  _mrStartSession();
+  _mrMonitor();
+}
+
+function _mrStartSession(){
+  _mrChunks = [];
+  const mime = ['audio/webm;codecs=opus','audio/webm','audio/ogg']
+               .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  _mrRecorder = new MediaRecorder(_mrStream, mime ? {mimeType:mime} : {});
+  _mrRecorder.ondataavailable = e => { if(e.data.size>0) _mrChunks.push(e.data); };
+  _mrRecorder.onstop = async () => {
+    const blob = new Blob(_mrChunks, {type: _mrRecorder.mimeType || 'audio/webm'});
+    _mrChunks = [];
+    if(blob.size > 1500 && isListening){
+      setStatus("⏳ Verwerken…");
+      try{
+        const lang = (language||"nl-NL").split("-")[0];
+        const res  = await fetch(\`/api/transcribe?lang=\${lang}\`, {
+          method:"POST", body:blob,
+          headers:{"Content-Type": blob.type || "audio/webm"}
+        });
+        const d = await res.json();
+        if(d.text && d.text.trim()){
+          $("heard-text").textContent = d.text.trim();
+          handleHeard(d.text.trim());
+        } else { setStatus("🎙️ Aan het luisteren…"); }
+      } catch(e){ console.warn("transcribe:", e); setStatus("🎙️ Aan het luisteren…"); }
+    }
+    if(isListening) _mrStartSession();
+  };
+  _mrRecorder.start(200);
+}
+
+function _mrMonitor(){
+  if(!_mrAnalyser){ return; }
+  const buf = new Uint8Array(_mrAnalyser.frequencyBinCount);
+  _mrAnalyser.getByteFrequencyData(buf);
+  const vol = buf.reduce((a,b)=>a+b,0) / buf.length;
+
+  if(isListening && vol > 7){
+    if(!_mrSpeaking){ _mrSpeaking=true; $("heard-text").textContent="🎙️ …"; }
+    clearTimeout(_mrSilTimer);
+    _mrSilTimer = setTimeout(()=>{
+      _mrSpeaking = false;
+      if(_mrRecorder && _mrRecorder.state==="recording") _mrRecorder.stop();
+    }, 1200);
+  }
+  _mrAnimId = requestAnimationFrame(_mrMonitor);
+}
+
+function _mrStop(){
+  cancelAnimationFrame(_mrAnimId);
+  clearTimeout(_mrSilTimer);
+  if(_mrRecorder && _mrRecorder.state!=="inactive") _mrRecorder.stop();
+  if(_mrStream){ _mrStream.getTracks().forEach(t=>t.stop()); _mrStream=null; }
+  _mrAnalyser = null; _mrRecorder = null; _mrSpeaking = false;
+}
+
+// ── Hoofd toggle ──────────────────────────────────────────────────────────────
 function toggleMic(){
-  if(!recognition && !initRecognition()) return;
+  const isMob = window.innerWidth < 640 || /Android|iPhone|iPad/i.test(navigator.userAgent);
+  _useGroq = isMob && serverGroqKey;
+
   if(isListening){
     isListening = false;
-    recognition.stop();
     clearTimeout(silenceTimer);
     accTranscript = "";
+    if(_useGroq || _mrStream){
+      _mrStop();
+    } else {
+      if(recognition) recognition.stop();
+    }
     updateMicUI();
     setStatus("Luisteren gestopt");
   } else {
-    isListening = true;
-    try{ recognition.start(); }catch(_){
-      recognition=null; initRecognition();
-      try{ recognition.start(); }catch(e2){}
+    if(_useGroq){
+      // Groq-pad: MediaRecorder, geen piepjes
+      _mrInit().then(()=>{
+        isListening = true;
+        updateMicUI();
+        setStatus("🎙️ Aan het luisteren…");
+      }).catch(e=>{
+        console.warn("MediaRecorder mislukt, fallback Web Speech:", e);
+        _useGroq = false;
+        _startWebSpeech();
+      });
+    } else {
+      _startWebSpeech();
     }
+  }
+}
+
+function _startWebSpeech(){
+  if(!recognition && !initRecognition()) return;
+  isListening = true;
+  try{ recognition.start(); }catch(_){
+    recognition=null; initRecognition();
+    try{ recognition.start(); }catch(e2){}
   }
 }
 
@@ -1290,8 +1426,9 @@ updateSpeechBtn();
 
 // Check server key status, then render initial options
 fetch('/api/status').then(r=>r.json()).then(d=>{
-  serverHasKey = !!d.has_key;
-  serverElKey  = !!d.has_el;
+  serverHasKey  = !!d.has_key;
+  serverElKey   = !!d.has_el;
+  serverGroqKey = !!d.has_groq;
   if(!serverHasKey && !apiKey){
     setStatus("ℹ️ Voeg een API-sleutel toe via ⚙️ voor slimme AI-suggesties");
   }
