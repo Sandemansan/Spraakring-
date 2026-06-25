@@ -1186,19 +1186,7 @@ function applyLayoutMode(){
 }
 function toggleLayout(){
   layoutMode=layoutMode==="ring"?"grid":"ring";
-  // Screen wakeLock: voorkomt dimmen tijdens gebruik
-let _wakeLock = null;
-async function _acquireWakeLock(){
-  try{
-    if(navigator.wakeLock) _wakeLock = await navigator.wakeLock.request("screen");
-  }catch(_){}
-}
-_acquireWakeLock();
-document.addEventListener("visibilitychange", ()=>{
-  if(document.visibilityState==="visible") _acquireWakeLock();
-});
-
-applyLayoutMode();
+  applyLayoutMode();
   if(lastOptions.length) renderOptions(currentCtx,lastOptions,breadcrumb[breadcrumb.length-1]||null);
 }
 function toggleSidebar(){
@@ -1455,6 +1443,15 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   }
 }).catch(()=>{});
 
+// Screen wakeLock: scherm blijft aan tijdens gebruik
+let _wakeLock = null;
+async function _acquireWakeLock(){
+  try{ if(navigator.wakeLock) _wakeLock = await navigator.wakeLock.request("screen"); }catch(_){}
+}
+_acquireWakeLock();
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible") _acquireWakeLock();
+});
 applyLayoutMode();
 if(sidebarHidden)$("sidebar").classList.add("sb-hidden");
 else $("chat-btn").classList.add("active-mode");
